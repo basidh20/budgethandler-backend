@@ -38,6 +38,39 @@ const userSchema = new mongoose.Schema(
             trim: true,
             maxlength: 5,
         },
+        // Profile fields
+        profilePhoto: {
+            type: String,
+            default: null,
+            trim: true,
+        },
+        dateOfBirth: {
+            type: Date,
+            default: null,
+        },
+        gender: {
+            type: String,
+            enum: ['male', 'female', 'other', 'prefer_not_to_say', null],
+            default: null,
+        },
+        phone: {
+            type: String,
+            default: null,
+            trim: true,
+            maxlength: 20,
+        },
+        bio: {
+            type: String,
+            default: null,
+            trim: true,
+            maxlength: 200,
+        },
+        country: {
+            type: String,
+            default: null,
+            trim: true,
+            maxlength: 100,
+        },
     },
     {
         timestamps: true, // Adds createdAt and updatedAt

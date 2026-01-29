@@ -62,9 +62,18 @@ const getProfile = async (req, res, next) => {
  */
 const updateProfile = async (req, res, next) => {
     try {
-        const { name, currency } = req.body;
+        const { name, currency, profilePhoto, dateOfBirth, gender, phone, bio, country } = req.body;
 
-        const user = await authService.updateProfile(req.user._id, { name, currency });
+        const user = await authService.updateProfile(req.user._id, { 
+            name, 
+            currency, 
+            profilePhoto, 
+            dateOfBirth, 
+            gender, 
+            phone, 
+            bio, 
+            country 
+        });
 
         return ApiResponse.success(res, 200, 'Profile updated successfully', { user });
     } catch (error) {
