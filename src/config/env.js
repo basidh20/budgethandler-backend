@@ -19,4 +19,7 @@ module.exports = {
 
     // CORS configuration
     CORS_ORIGIN: process.env.CORS_ORIGIN || '*',
+
+    // AI API configuration (Groq - Free tier)
+    GROQ_API_KEY: process.env.GROQ_API_KEY || '',
 };
