@@ -21,6 +21,7 @@ const transactionRoutes = require('./src/routes/transaction.routes');
 const budgetRoutes = require('./src/routes/budget.routes');
 const summaryRoutes = require('./src/routes/summary.routes');
 const assistantRoutes = require('./src/routes/assistant.routes');
+const savingsRoutes = require('./src/routes/savings.routes');
 
 // Import error handlers
 const { notFound, errorHandler } = require('./src/middleware/errorHandler');
@@ -76,6 +77,7 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/budgets', budgetRoutes);
 app.use('/api/summary', summaryRoutes);
 app.use('/api/assistant', assistantRoutes);
+app.use('/api/savings', savingsRoutes);
 
 // ======================
 // ERROR HANDLING
@@ -107,6 +109,7 @@ const server = app.listen(PORT, () => {
 ║   • /api/transactions - Transaction CRUD                  ║
 ║   • /api/budgets     - Budget management                  ║
 ║   • /api/summary     - Dashboard & analytics              ║
+║   • /api/savings     - Savings management                 ║
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
   `);
