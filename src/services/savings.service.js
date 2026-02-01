@@ -66,13 +66,47 @@ class SavingsService {
         const monthlyDeposits = monthlyStats.find(s => s._id === 'credit')?.total || 0;
         const monthlyWithdrawals = monthlyStats.find(s => s._id === 'debit')?.total || 0;
 
+        // Get available balance for manual contributions
+        const availableBalance = await this.getAvailableBalance(userId);
+
         return {
             ...savings.toObject(),
             recentTransactions,
             monthlyDeposits,
             monthlyWithdrawals,
             monthlyNet: monthlyDeposits - monthlyWithdrawals,
+            availableBalance,
         };
+    }
+
+    /**
+     * Get available balance (Total Balance = income - expenses - savings) for manual savings contributions
+     * This is the money available in the user's main account that can be moved to savings
+     * @param {string} userId - User ID
+     * @returns {number} - Available balance (Total Balance after savings)
+     */
+    async getAvailableBalance(userId) {
+        const result = await Transaction.aggregate([
+            {
+                $match: {
+                    userId: new mongoose.Types.ObjectId(userId),
+                },
+            },
+            {
+                $group: {
+                    _id: '$type',
+                    total: { $sum: '$amount' },
+                },
+            },
+        ]);
+
+        const income = result.find(r => r._id === 'income')?.total || 0;
+        const expenses = result.find(r => r._id === 'expense')?.total || 0;
+        const savings = await this.getOrCreateSavings(userId);
+
+        // Total Balance = Income - Expenses - Savings Balance
+        // This is what's shown on dashboard and available to contribute
+        return Math.max(0, income - expenses - savings.balance);
     }
 
     /**
@@ -82,9 +116,10 @@ class SavingsService {
      * @param {string} source - Source of deposit (manual, budget_surplus, etc.)
      * @param {string} description - Transaction description
      * @param {Object} budgetCycle - { month, year } if from budget
+     * @param {string} relatedBudgetId - Related budget ID
      * @returns {Object} - Updated savings and transaction
      */
-    async deposit(userId, amount, source, description = '', budgetCycle = null) {
+    async deposit(userId, amount, source, description = '', budgetCycle = null, relatedBudgetId = null) {
         const session = await mongoose.startSession();
         session.startTransaction();
 
@@ -121,6 +156,7 @@ class SavingsService {
                     description: description || this.getDefaultDescription(source, 'credit', budgetCycle),
                     budgetCycle,
                     balanceAfter: newBalance,
+                    relatedBudgetId,
                 }],
                 { session }
             );
@@ -146,9 +182,10 @@ class SavingsService {
      * @param {string} source - Source of withdrawal (manual, budget_overrun, etc.)
      * @param {string} description - Transaction description
      * @param {Object} budgetCycle - { month, year } if for budget
+     * @param {string} relatedBudgetId - Related budget ID
      * @returns {Object} - Updated savings and transaction
      */
-    async withdraw(userId, amount, source, description = '', budgetCycle = null) {
+    async withdraw(userId, amount, source, description = '', budgetCycle = null, relatedBudgetId = null) {
         const session = await mongoose.startSession();
         session.startTransaction();
 
@@ -180,6 +217,7 @@ class SavingsService {
                     description: description || this.getDefaultDescription(source, 'debit', budgetCycle),
                     budgetCycle,
                     balanceAfter: newBalance,
+                    relatedBudgetId,
                 }],
                 { session }
             );
@@ -201,12 +239,14 @@ class SavingsService {
     /**
      * Get default description based on source
      */
-    getDefaultDescription(source, type, budgetCycle) {
+    getDefaultDescription(source, type, budgetCycle, budgetInfo = null) {
         const cycleStr = budgetCycle ? ` for ${budgetCycle.month}/${budgetCycle.year}` : '';
+        const budgetStr = budgetInfo ? ` (${budgetInfo.categoryName}: ${budgetInfo.period})` : '';
 
         const descriptions = {
-            budget_surplus: `Budget surplus transfer${cycleStr}`,
-            budget_overrun: `Budget overrun coverage${cycleStr}`,
+            budget_surplus: `Budget surplus transfer${cycleStr}${budgetStr}`,
+            budget_remainder: `Budget remainder transfer${budgetStr}`,
+            budget_overrun: `Budget overrun coverage${cycleStr}${budgetStr}`,
             manual: type === 'credit' ? 'Manual deposit' : 'Manual withdrawal',
             goal_contribution: 'Savings goal contribution',
             interest: 'Interest earned',
@@ -216,7 +256,196 @@ class SavingsService {
     }
 
     /**
-     * Transfer budget surplus to savings
+     * Transfer budget remainder to savings (new period-based)
+     * @param {string} userId - User ID
+     * @param {string} budgetId - Budget ID
+     * @returns {Object} - Transfer result
+     */
+    async transferBudgetRemainder(userId, budgetId) {
+        const budgetService = require('./budget.service');
+        
+        const budget = await Budget.findOne({ _id: budgetId, userId })
+            .populate('categoryId', 'name');
+        
+        if (!budget) {
+            const error = new Error('Budget not found');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (budget.savingsTransferred) {
+            const error = new Error('Budget remainder has already been transferred to savings');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        // Calculate remaining amount
+        const spent = await budgetService.calculateSpendingForPeriod(
+            userId,
+            budget.categoryId._id,
+            budget.startDate,
+            budget.endDate
+        );
+        const remaining = budget.amount - spent;
+
+        if (remaining <= 0) {
+            const error = new Error('No remaining budget to transfer. Budget is fully spent or overspent.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const budgetInfo = {
+            categoryName: budget.categoryId.name,
+            period: this.formatDateRange(budget.startDate, budget.endDate),
+        };
+
+        // Transfer to savings
+        const result = await this.deposit(
+            userId,
+            remaining,
+            'budget_remainder',
+            `Budget remainder: ${budget.categoryId.name} (${budgetInfo.period})`,
+            { month: budget.month, year: budget.year },
+            budgetId
+        );
+
+        // Mark budget as transferred
+        await budgetService.markSavingsTransferred(budgetId, userId, remaining);
+
+        return {
+            ...result,
+            budget: {
+                id: budget._id,
+                category: budget.categoryId.name,
+                amount: budget.amount,
+                spent,
+                remaining,
+                period: budgetInfo.period,
+            },
+        };
+    }
+
+    /**
+     * Manual savings contribution from main account balance
+     * @param {string} userId - User ID
+     * @param {number} amount - Amount to contribute
+     * @param {string} description - Optional description
+     * @returns {Object} - Transfer result
+     */
+    async manualContribution(userId, amount, description = '') {
+        // Validate available balance
+        const availableBalance = await this.getAvailableBalance(userId);
+        
+        if (amount > availableBalance) {
+            const error = new Error(`Insufficient available balance. Available: ${availableBalance.toFixed(2)}, Requested: ${amount.toFixed(2)}`);
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (amount <= 0) {
+            const error = new Error('Amount must be greater than 0');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        return this.deposit(
+            userId,
+            amount,
+            'manual',
+            description || 'Manual savings contribution'
+        );
+    }
+
+    /**
+     * Cover budget overrun from savings (period-based)
+     * @param {string} userId - User ID
+     * @param {string} budgetId - Budget ID
+     * @param {number} amount - Amount to cover (optional, defaults to full overrun)
+     * @returns {Object} - Transfer result
+     */
+    async coverBudgetOverrunById(userId, budgetId, amount = null) {
+        const budgetService = require('./budget.service');
+        
+        const budget = await Budget.findOne({ _id: budgetId, userId })
+            .populate('categoryId', 'name');
+        
+        if (!budget) {
+            const error = new Error('Budget not found');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        // Calculate overrun amount
+        const spent = await budgetService.calculateSpendingForPeriod(
+            userId,
+            budget.categoryId._id,
+            budget.startDate,
+            budget.endDate
+        );
+        const overrun = spent - budget.amount;
+
+        if (overrun <= 0) {
+            const error = new Error('Budget is not overrun');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const coverAmount = amount !== null ? Math.min(amount, overrun) : overrun;
+        
+        const savings = await this.getOrCreateSavings(userId);
+        if (savings.balance < coverAmount) {
+            const error = new Error(`Insufficient savings. Available: ${savings.balance.toFixed(2)}, Required: ${coverAmount.toFixed(2)}`);
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const budgetInfo = {
+            categoryName: budget.categoryId.name,
+            period: this.formatDateRange(budget.startDate, budget.endDate),
+        };
+
+        // Withdraw from savings
+        const result = await this.withdraw(
+            userId,
+            coverAmount,
+            'budget_overrun',
+            `Overrun coverage: ${budget.categoryId.name} (${budgetInfo.period})`,
+            { month: budget.month, year: budget.year },
+            budgetId
+        );
+
+        return {
+            ...result,
+            budget: {
+                id: budget._id,
+                category: budget.categoryId.name,
+                amount: budget.amount,
+                spent,
+                overrun,
+                covered: coverAmount,
+                remainingOverrun: overrun - coverAmount,
+                period: budgetInfo.period,
+            },
+        };
+    }
+
+    /**
+     * Format date range for display
+     */
+    formatDateRange(startDate, endDate) {
+        const options = { month: 'short', day: 'numeric' };
+        const yearOptions = { year: 'numeric' };
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        
+        if (start.getFullYear() === end.getFullYear()) {
+            return `${start.toLocaleDateString('en-US', options)} - ${end.toLocaleDateString('en-US', { ...options, ...yearOptions })}`;
+        }
+        return `${start.toLocaleDateString('en-US', { ...options, ...yearOptions })} - ${end.toLocaleDateString('en-US', { ...options, ...yearOptions })}`;
+    }
+
+    /**
+     * Transfer budget surplus to savings (legacy month-based)
      * @param {string} userId - User ID
      * @param {number} month - Budget month
      * @param {number} year - Budget year

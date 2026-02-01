@@ -17,6 +17,9 @@ router.use(protect);
 // Get savings account
 router.get('/', savingsController.getSavings);
 
+// Get available balance for manual contributions
+router.get('/available-balance', savingsController.getAvailableBalance);
+
 // Get transfer status for budget cycle
 router.get('/transfer-status', savingsController.getTransferStatus);
 
@@ -47,7 +50,15 @@ router.post(
     savingsController.withdraw
 );
 
-// Transfer budget surplus to savings
+// Manual savings contribution from main balance
+router.post(
+    '/contribute',
+    savingsValidators.deposit,
+    validate,
+    savingsController.manualContribution
+);
+
+// Transfer budget surplus to savings (legacy month-based)
 router.post(
     '/transfer-surplus',
     savingsValidators.transferSurplus,
@@ -55,12 +66,24 @@ router.post(
     savingsController.transferBudgetSurplus
 );
 
-// Cover budget overrun from savings
+// Transfer budget remainder to savings (period-based)
+router.post(
+    '/transfer-budget-remainder',
+    savingsController.transferBudgetRemainder
+);
+
+// Cover budget overrun from savings (legacy month-based)
 router.post(
     '/cover-overrun',
     savingsValidators.coverOverrun,
     validate,
     savingsController.coverBudgetOverrun
+);
+
+// Cover budget overrun from savings (period-based)
+router.post(
+    '/cover-budget-overrun',
+    savingsController.coverBudgetOverrunById
 );
 
 module.exports = router;

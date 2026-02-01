@@ -170,6 +170,85 @@ const getStatistics = async (req, res, next) => {
     }
 };
 
+/**
+ * @desc    Transfer budget remainder to savings (period-based)
+ * @route   POST /api/savings/transfer-budget-remainder
+ * @access  Private
+ */
+const transferBudgetRemainder = async (req, res, next) => {
+    try {
+        const { budgetId } = req.body;
+
+        const result = await savingsService.transferBudgetRemainder(
+            req.user._id,
+            budgetId
+        );
+
+        return ApiResponse.success(res, 200, 'Budget remainder transferred to savings', result);
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * @desc    Manual savings contribution from main balance
+ * @route   POST /api/savings/contribute
+ * @access  Private
+ */
+const manualContribution = async (req, res, next) => {
+    try {
+        const { amount, description } = req.body;
+
+        const result = await savingsService.manualContribution(
+            req.user._id,
+            amount,
+            description
+        );
+
+        return ApiResponse.success(res, 201, 'Savings contribution successful', result);
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * @desc    Cover budget overrun from savings (period-based)
+ * @route   POST /api/savings/cover-budget-overrun
+ * @access  Private
+ */
+const coverBudgetOverrunById = async (req, res, next) => {
+    try {
+        const { budgetId, amount } = req.body;
+
+        const result = await savingsService.coverBudgetOverrunById(
+            req.user._id,
+            budgetId,
+            amount
+        );
+
+        return ApiResponse.success(res, 200, 'Budget overrun covered from savings', result);
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * @desc    Get available balance for manual contribution
+ * @route   GET /api/savings/available-balance
+ * @access  Private
+ */
+const getAvailableBalance = async (req, res, next) => {
+    try {
+        const availableBalance = await savingsService.getAvailableBalance(req.user._id);
+
+        return ApiResponse.success(res, 200, 'Available balance retrieved', {
+            availableBalance,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getSavings,
     deposit,
@@ -179,4 +258,8 @@ module.exports = {
     getTransferStatus,
     getTransactions,
     getStatistics,
+    transferBudgetRemainder,
+    manualContribution,
+    coverBudgetOverrunById,
+    getAvailableBalance,
 };

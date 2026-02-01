@@ -6,6 +6,8 @@
 const Transaction = require('../models/Transaction');
 const Category = require('../models/Category');
 const Budget = require('../models/Budget');
+const Savings = require('../models/Savings');
+const SavingsTransaction = require('../models/SavingsTransaction');
 const mongoose = require('mongoose');
 
 class SummaryService {
@@ -97,11 +99,18 @@ class SummaryService {
             })
         );
 
+        // Get savings balance
+        const savings = await Savings.findOne({ userId });
+        const savingsBalance = savings?.balance || 0;
+
         return {
             balance: {
-                total: allTimeIncome - allTimeExpense,
+                total: allTimeIncome - allTimeExpense - savingsBalance,
                 income: allTimeIncome,
                 expense: allTimeExpense,
+            },
+            savings: {
+                balance: savingsBalance,
             },
             monthly: {
                 month: currentMonth,
@@ -337,6 +346,601 @@ class SummaryService {
             },
             months,
         };
+    }
+
+    /**
+     * Get week date range based on locale (week start day)
+     * @param {Date} date - Reference date
+     * @param {number} weekStartDay - 0 = Sunday, 1 = Monday, etc.
+     * @returns {Object} - { startDate, endDate }
+     */
+    getWeekRange(date, weekStartDay = 1) {
+        const d = new Date(date);
+        const day = d.getDay();
+        const diff = (day < weekStartDay ? 7 : 0) + day - weekStartDay;
+        
+        const startDate = new Date(d);
+        startDate.setDate(d.getDate() - diff);
+        startDate.setHours(0, 0, 0, 0);
+        
+        const endDate = new Date(startDate);
+        endDate.setDate(startDate.getDate() + 6);
+        endDate.setHours(23, 59, 59, 999);
+        
+        return { startDate, endDate };
+    }
+
+    /**
+     * Get weekly summary with category breakdown and insights
+     * @param {string} userId - User ID
+     * @param {string} weekOffset - 0 for current week, -1 for previous week
+     * @param {number} weekStartDay - 0 = Sunday, 1 = Monday
+     * @returns {Object} - Weekly summary data
+     */
+    async getWeeklySummary(userId, weekOffset = 0, weekStartDay = 1) {
+        const now = new Date();
+        const targetDate = new Date(now);
+        targetDate.setDate(now.getDate() + (weekOffset * 7));
+        
+        const { startDate, endDate } = this.getWeekRange(targetDate, weekStartDay);
+
+        // Get previous week for comparison
+        const prevWeekDate = new Date(startDate);
+        prevWeekDate.setDate(prevWeekDate.getDate() - 7);
+        const prevWeek = this.getWeekRange(prevWeekDate, weekStartDay);
+
+        // Get current week totals
+        const currentWeekTotals = await Transaction.aggregate([
+            {
+                $match: {
+                    userId: new mongoose.Types.ObjectId(userId),
+                    date: { $gte: startDate, $lte: endDate },
+                },
+            },
+            {
+                $group: {
+                    _id: '$type',
+                    total: { $sum: '$amount' },
+                    count: { $sum: 1 },
+                },
+            },
+        ]);
+
+        // Get previous week totals for comparison
+        const prevWeekTotals = await Transaction.aggregate([
+            {
+                $match: {
+                    userId: new mongoose.Types.ObjectId(userId),
+                    date: { $gte: prevWeek.startDate, $lte: prevWeek.endDate },
+                },
+            },
+            {
+                $group: {
+                    _id: '$type',
+                    total: { $sum: '$amount' },
+                },
+            },
+        ]);
+
+        // Get category breakdown for expenses
+        const categoryBreakdown = await Transaction.aggregate([
+            {
+                $match: {
+                    userId: new mongoose.Types.ObjectId(userId),
+                    type: 'expense',
+                    date: { $gte: startDate, $lte: endDate },
+                },
+            },
+            {
+                $group: {
+                    _id: '$categoryId',
+                    total: { $sum: '$amount' },
+                    count: { $sum: 1 },
+                },
+            },
+            {
+                $lookup: {
+                    from: 'categories',
+                    localField: '_id',
+                    foreignField: '_id',
+                    as: 'category',
+                },
+            },
+            {
+                $unwind: { path: '$category', preserveNullAndEmptyArrays: true },
+            },
+            {
+                $project: {
+                    _id: 1,
+                    total: 1,
+                    count: 1,
+                    name: { $ifNull: ['$category.name', 'Uncategorized'] },
+                    icon: { $ifNull: ['$category.icon', 'category'] },
+                    color: { $ifNull: ['$category.color', '#808080'] },
+                },
+            },
+            {
+                $sort: { total: -1 },
+            },
+        ]);
+
+        // Get daily breakdown for the week
+        const dailyBreakdown = await Transaction.aggregate([
+            {
+                $match: {
+                    userId: new mongoose.Types.ObjectId(userId),
+                    date: { $gte: startDate, $lte: endDate },
+                },
+            },
+            {
+                $group: {
+                    _id: {
+                        date: { $dateToString: { format: '%Y-%m-%d', date: '$date' } },
+                        type: '$type',
+                    },
+                    total: { $sum: '$amount' },
+                },
+            },
+            {
+                $sort: { '_id.date': 1 },
+            },
+        ]);
+
+        // Parse totals
+        const parseTotal = (data, type) => {
+            const found = data.find((d) => d._id === type);
+            return found ? found.total : 0;
+        };
+
+        const income = parseTotal(currentWeekTotals, 'income');
+        const expense = parseTotal(currentWeekTotals, 'expense');
+        const prevIncome = parseTotal(prevWeekTotals, 'income');
+        const prevExpense = parseTotal(prevWeekTotals, 'expense');
+
+        // Calculate category percentages
+        const totalExpense = expense || 1;
+        const categoriesWithPercentage = categoryBreakdown.map(cat => ({
+            ...cat,
+            percentage: Math.round((cat.total / totalExpense) * 100),
+        }));
+
+        // Generate insights
+        const insights = this.generateWeeklyInsights(
+            income, expense, prevIncome, prevExpense, categoriesWithPercentage
+        );
+
+        return {
+            weekRange: {
+                start: startDate,
+                end: endDate,
+                weekOffset,
+            },
+            summary: {
+                income,
+                expense,
+                netBalance: income - expense,
+                transactionCount: currentWeekTotals.reduce((sum, t) => sum + (t.count || 0), 0),
+            },
+            comparison: {
+                prevIncome,
+                prevExpense,
+                incomeChange: prevIncome > 0 ? ((income - prevIncome) / prevIncome * 100).toFixed(1) : 0,
+                expenseChange: prevExpense > 0 ? ((expense - prevExpense) / prevExpense * 100).toFixed(1) : 0,
+            },
+            categoryBreakdown: categoriesWithPercentage,
+            dailyBreakdown,
+            insights,
+            hasData: currentWeekTotals.length > 0,
+        };
+    }
+
+    /**
+     * Get comprehensive monthly summary with budget awareness and savings integration
+     * @param {string} userId - User ID
+     * @param {number} month - Month (1-12)
+     * @param {number} year - Year
+     * @param {boolean} includeComparison - Include previous month comparison
+     * @returns {Object} - Monthly summary data
+     */
+    async getComprehensiveMonthlySummary(userId, month, year, includeComparison = true) {
+        const startDate = new Date(year, month - 1, 1);
+        const endDate = new Date(year, month, 0, 23, 59, 59, 999);
+
+        // Get previous month dates
+        const prevMonth = month === 1 ? 12 : month - 1;
+        const prevYear = month === 1 ? year - 1 : year;
+        const prevStartDate = new Date(prevYear, prevMonth - 1, 1);
+        const prevEndDate = new Date(prevYear, prevMonth, 0, 23, 59, 59, 999);
+
+        // Get current month totals
+        const monthlyTotals = await Transaction.aggregate([
+            {
+                $match: {
+                    userId: new mongoose.Types.ObjectId(userId),
+                    date: { $gte: startDate, $lte: endDate },
+                },
+            },
+            {
+                $group: {
+                    _id: '$type',
+                    total: { $sum: '$amount' },
+                    count: { $sum: 1 },
+                },
+            },
+        ]);
+
+        // Get previous month totals for comparison
+        let prevMonthTotals = [];
+        if (includeComparison) {
+            prevMonthTotals = await Transaction.aggregate([
+                {
+                    $match: {
+                        userId: new mongoose.Types.ObjectId(userId),
+                        date: { $gte: prevStartDate, $lte: prevEndDate },
+                    },
+                },
+                {
+                    $group: {
+                        _id: '$type',
+                        total: { $sum: '$amount' },
+                    },
+                },
+            ]);
+        }
+
+        // Get category breakdown for expenses
+        const categoryBreakdown = await Transaction.aggregate([
+            {
+                $match: {
+                    userId: new mongoose.Types.ObjectId(userId),
+                    type: 'expense',
+                    date: { $gte: startDate, $lte: endDate },
+                },
+            },
+            {
+                $group: {
+                    _id: '$categoryId',
+                    total: { $sum: '$amount' },
+                    count: { $sum: 1 },
+                },
+            },
+            {
+                $lookup: {
+                    from: 'categories',
+                    localField: '_id',
+                    foreignField: '_id',
+                    as: 'category',
+                },
+            },
+            {
+                $unwind: { path: '$category', preserveNullAndEmptyArrays: true },
+            },
+            {
+                $project: {
+                    _id: 1,
+                    total: 1,
+                    count: 1,
+                    name: { $ifNull: ['$category.name', 'Uncategorized'] },
+                    icon: { $ifNull: ['$category.icon', 'category'] },
+                    color: { $ifNull: ['$category.color', '#808080'] },
+                },
+            },
+            {
+                $sort: { total: -1 },
+            },
+        ]);
+
+        // Get budgets for this month
+        const budgets = await Budget.find({
+            userId,
+            month,
+            year,
+        }).populate('categoryId', 'name icon color');
+
+        // Calculate budget spending
+        const budgetStatus = await Promise.all(
+            budgets.map(async (budget) => {
+                const spent = await this.calculateCategorySpending(
+                    userId,
+                    budget.categoryId._id,
+                    startDate,
+                    endDate
+                );
+                const remaining = budget.amount - spent;
+                const percentage = Math.round((spent / budget.amount) * 100);
+                
+                return {
+                    categoryId: budget.categoryId._id,
+                    category: budget.categoryId.name,
+                    icon: budget.categoryId.icon,
+                    color: budget.categoryId.color,
+                    budgeted: budget.amount,
+                    spent,
+                    remaining,
+                    percentage,
+                    status: percentage >= 100 ? 'exceeded' : percentage >= 80 ? 'warning' : 'ok',
+                };
+            })
+        );
+
+        // Get savings data for this month
+        let savingsData = {
+            addedToSavings: 0,
+            withdrawnFromSavings: 0,
+            currentBalance: 0,
+        };
+
+        try {
+            const savings = await Savings.findOne({ userId });
+            if (savings) {
+                savingsData.currentBalance = savings.balance;
+                
+                // Find savings transferred this month
+                const monthTransfer = savings.transferredCycles.find(
+                    c => c.month === month && c.year === year
+                );
+                if (monthTransfer) {
+                    savingsData.addedToSavings = monthTransfer.amount;
+                }
+            }
+
+            // Get savings transactions for this month
+            const savingsTransactions = await SavingsTransaction.aggregate([
+                {
+                    $match: {
+                        userId: new mongoose.Types.ObjectId(userId),
+                        createdAt: { $gte: startDate, $lte: endDate },
+                    },
+                },
+                {
+                    $group: {
+                        _id: '$type',
+                        total: { $sum: '$amount' },
+                    },
+                },
+            ]);
+
+            const deposits = savingsTransactions.find(t => t._id === 'credit')?.total || 0;
+            const withdrawals = savingsTransactions.find(t => t._id === 'debit')?.total || 0;
+            
+            savingsData.addedToSavings = deposits;
+            savingsData.withdrawnFromSavings = withdrawals;
+        } catch (error) {
+            // Savings not available, continue without it
+        }
+
+        // Parse totals
+        const parseTotal = (data, type) => {
+            const found = data.find((d) => d._id === type);
+            return found ? found.total : 0;
+        };
+
+        const income = parseTotal(monthlyTotals, 'income');
+        const expense = parseTotal(monthlyTotals, 'expense');
+        const prevIncome = parseTotal(prevMonthTotals, 'income');
+        const prevExpense = parseTotal(prevMonthTotals, 'expense');
+
+        // Calculate overall budget awareness
+        const totalBudgeted = budgetStatus.reduce((sum, b) => sum + b.budgeted, 0);
+        const totalSpent = expense;
+        const budgetUsagePercentage = totalBudgeted > 0 ? Math.round((totalSpent / totalBudgeted) * 100) : 0;
+        
+        let budgetAwareness = {
+            totalBudgeted,
+            totalSpent,
+            usagePercentage: budgetUsagePercentage,
+            status: 'not_set',
+            message: 'No budget set for this month',
+        };
+
+        if (totalBudgeted > 0) {
+            if (budgetUsagePercentage >= 100) {
+                budgetAwareness.status = 'exceeded';
+                budgetAwareness.message = `You've exceeded your budget by ${((totalSpent - totalBudgeted)).toFixed(0)}`;
+            } else if (budgetUsagePercentage >= 80) {
+                budgetAwareness.status = 'warning';
+                budgetAwareness.message = `You've used ${budgetUsagePercentage}% of your budget. ${(totalBudgeted - totalSpent).toFixed(0)} remaining.`;
+            } else {
+                budgetAwareness.status = 'ok';
+                budgetAwareness.message = `You're within budget. ${(totalBudgeted - totalSpent).toFixed(0)} remaining.`;
+            }
+        }
+
+        // Calculate category percentages
+        const totalExpense = expense || 1;
+        const categoriesWithPercentage = categoryBreakdown.map(cat => ({
+            ...cat,
+            percentage: Math.round((cat.total / totalExpense) * 100),
+        }));
+
+        // Generate monthly insights
+        const insights = this.generateMonthlyInsights(
+            income, expense, prevIncome, prevExpense,
+            categoriesWithPercentage, budgetStatus, savingsData
+        );
+
+        return {
+            month,
+            year,
+            daysInMonth: endDate.getDate(),
+            summary: {
+                income,
+                expense,
+                netBalance: income - expense,
+                savingsRate: income > 0 ? Math.round(((income - expense) / income) * 100) : 0,
+                transactionCount: monthlyTotals.reduce((sum, t) => sum + (t.count || 0), 0),
+            },
+            comparison: includeComparison ? {
+                prevMonth,
+                prevYear,
+                prevIncome,
+                prevExpense,
+                incomeChange: prevIncome > 0 ? parseFloat(((income - prevIncome) / prevIncome * 100).toFixed(1)) : 0,
+                expenseChange: prevExpense > 0 ? parseFloat(((expense - prevExpense) / prevExpense * 100).toFixed(1)) : 0,
+                isImproved: (income - expense) > (prevIncome - prevExpense),
+            } : null,
+            categoryBreakdown: categoriesWithPercentage,
+            budgetStatus,
+            budgetAwareness,
+            savings: savingsData,
+            insights,
+            hasData: monthlyTotals.length > 0,
+        };
+    }
+
+    /**
+     * Generate weekly insights based on data
+     */
+    generateWeeklyInsights(income, expense, prevIncome, prevExpense, categories) {
+        const insights = [];
+
+        // Compare with previous week
+        if (prevExpense > 0) {
+            const expenseChange = ((expense - prevExpense) / prevExpense * 100).toFixed(1);
+            if (expenseChange > 10) {
+                insights.push({
+                    type: 'warning',
+                    icon: 'trending_up',
+                    message: `You spent ${expenseChange}% more than last week`,
+                });
+            } else if (expenseChange < -10) {
+                insights.push({
+                    type: 'success',
+                    icon: 'trending_down',
+                    message: `Great! You spent ${Math.abs(expenseChange)}% less than last week`,
+                });
+            }
+        }
+
+        // Top spending category
+        if (categories.length > 0) {
+            const topCategory = categories[0];
+            if (topCategory.percentage >= 40) {
+                insights.push({
+                    type: 'info',
+                    icon: 'pie_chart',
+                    message: `${topCategory.name} accounts for ${topCategory.percentage}% of your spending`,
+                });
+            }
+        }
+
+        // Net balance insight
+        const netBalance = income - expense;
+        if (netBalance > 0) {
+            insights.push({
+                type: 'success',
+                icon: 'savings',
+                message: `You saved ${netBalance.toFixed(0)} this week`,
+            });
+        } else if (netBalance < 0) {
+            insights.push({
+                type: 'warning',
+                icon: 'warning',
+                message: `You overspent by ${Math.abs(netBalance).toFixed(0)} this week`,
+            });
+        }
+
+        // No data insight
+        if (income === 0 && expense === 0) {
+            insights.push({
+                type: 'info',
+                icon: 'info',
+                message: 'No transactions recorded this week',
+            });
+        }
+
+        return insights;
+    }
+
+    /**
+     * Generate monthly insights based on data
+     */
+    generateMonthlyInsights(income, expense, prevIncome, prevExpense, categories, budgetStatus, savingsData) {
+        const insights = [];
+
+        // Savings rate insight
+        const savingsRate = income > 0 ? ((income - expense) / income * 100) : 0;
+        if (savingsRate >= 20) {
+            insights.push({
+                type: 'success',
+                icon: 'emoji_events',
+                message: `Excellent! You saved ${savingsRate.toFixed(0)}% of your income this month`,
+            });
+        } else if (savingsRate > 0 && savingsRate < 10) {
+            insights.push({
+                type: 'warning',
+                icon: 'trending_flat',
+                message: `You saved only ${savingsRate.toFixed(0)}% of your income. Try to increase savings.`,
+            });
+        }
+
+        // Compare with previous month
+        if (prevExpense > 0) {
+            const expenseChange = ((expense - prevExpense) / prevExpense * 100).toFixed(1);
+            if (expenseChange > 20) {
+                insights.push({
+                    type: 'warning',
+                    icon: 'trending_up',
+                    message: `Your spending increased by ${expenseChange}% compared to last month`,
+                });
+            } else if (expenseChange < -20) {
+                insights.push({
+                    type: 'success',
+                    icon: 'trending_down',
+                    message: `Great job! You reduced spending by ${Math.abs(expenseChange)}% from last month`,
+                });
+            }
+        }
+
+        // Budget warnings
+        const overBudgetCategories = budgetStatus.filter(b => b.status === 'exceeded');
+        if (overBudgetCategories.length > 0) {
+            insights.push({
+                type: 'error',
+                icon: 'warning',
+                message: `${overBudgetCategories.length} ${overBudgetCategories.length === 1 ? 'category' : 'categories'} exceeded budget`,
+            });
+        }
+
+        // Savings integration insight
+        if (savingsData.addedToSavings > 0) {
+            insights.push({
+                type: 'success',
+                icon: 'savings',
+                message: `You added ${savingsData.addedToSavings.toFixed(0)} to savings this month`,
+            });
+        }
+
+        if (savingsData.withdrawnFromSavings > 0) {
+            insights.push({
+                type: 'info',
+                icon: 'account_balance_wallet',
+                message: `You withdrew ${savingsData.withdrawnFromSavings.toFixed(0)} from savings`,
+            });
+        }
+
+        // Top spending category
+        if (categories.length > 0) {
+            const topCategory = categories[0];
+            if (topCategory.percentage >= 30) {
+                insights.push({
+                    type: 'info',
+                    icon: 'category',
+                    message: `Highest spending: ${topCategory.name} (${topCategory.percentage}%)`,
+                });
+            }
+        }
+
+        // No data insight
+        if (income === 0 && expense === 0) {
+            insights.push({
+                type: 'info',
+                icon: 'info',
+                message: 'No transactions recorded this month',
+            });
+        }
+
+        return insights;
     }
 }
 
