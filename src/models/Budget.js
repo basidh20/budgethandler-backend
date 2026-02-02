@@ -46,8 +46,8 @@ const budgetSchema = new mongoose.Schema(
         periodType: {
             type: String,
             enum: {
-                values: ['weekly', 'monthly', 'custom'],
-                message: 'Period type must be weekly, monthly, or custom',
+                values: ['daily', 'weekly', 'biweekly', 'monthly', 'quarterly', 'yearly', 'custom'],
+                message: 'Invalid period type',
             },
             default: 'monthly',
         },
@@ -94,21 +94,18 @@ budgetSchema.index({ userId: 1, categoryId: 1, startDate: 1, endDate: 1 });
 budgetSchema.index({ userId: 1, month: 1, year: 1 });
 
 // Validate that endDate is after startDate
-budgetSchema.pre('validate', function(next) {
+budgetSchema.pre('validate', async function () {
     if (this.startDate && this.endDate && this.endDate <= this.startDate) {
-        next(new Error('End date must be after start date'));
-    } else {
-        next();
+        throw new Error('End date must be after start date');
     }
 });
 
 // Auto-set month and year from startDate for backward compatibility
-budgetSchema.pre('save', function(next) {
+budgetSchema.pre('save', async function () {
     if (this.startDate) {
         this.month = this.startDate.getMonth() + 1;
         this.year = this.startDate.getFullYear();
     }
-    next();
 });
 
 // Virtual for calculating days remaining

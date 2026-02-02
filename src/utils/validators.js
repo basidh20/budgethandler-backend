@@ -277,16 +277,32 @@ const budgetValidators = {
             .withMessage('Budget amount is required')
             .isFloat({ min: 0.01 })
             .withMessage('Amount must be a positive number'),
+        // Support both new date range (startDate/endDate) and legacy (month/year)
+        body('startDate')
+            .optional()
+            .isISO8601()
+            .withMessage('Start date must be a valid date'),
+        body('endDate')
+            .optional()
+            .isISO8601()
+            .withMessage('End date must be a valid date'),
+        body('periodType')
+            .optional()
+            .isIn(['daily', 'weekly', 'biweekly', 'monthly', 'quarterly', 'yearly', 'custom'])
+            .withMessage('Invalid period type'),
         body('month')
-            .notEmpty()
-            .withMessage('Month is required')
+            .optional()
             .isInt({ min: 1, max: 12 })
             .withMessage('Month must be between 1 and 12'),
         body('year')
-            .notEmpty()
-            .withMessage('Year is required')
+            .optional()
             .isInt({ min: 2000, max: 2100 })
             .withMessage('Invalid year'),
+        body('notes')
+            .optional()
+            .isString()
+            .isLength({ max: 500 })
+            .withMessage('Notes cannot exceed 500 characters'),
     ],
 
     getAll: [
