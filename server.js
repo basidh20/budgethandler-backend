@@ -60,6 +60,16 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // API ROUTES
 // ======================
 
+// Root health check (for Render/deployment)
+app.get('/', (req, res) => {
+    res.status(200).json({
+        success: true,
+        message: 'Budget Tracker API',
+        version: '1.0.0',
+        docs: '/api/health',
+    });
+});
+
 // Health check endpoint
 app.get('/api/health', (req, res) => {
     res.status(200).json({
