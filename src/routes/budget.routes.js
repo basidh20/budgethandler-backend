@@ -14,8 +14,12 @@ const { budgetValidators } = require('../utils/validators');
 // All routes are protected
 router.use(protect);
 
-// Summary route must come before /:id to avoid conflict
+// Static routes must come before /:id to avoid conflict
 router.get('/summary', budgetController.getSummary);
+router.get('/presets', budgetController.getPresets);
+router.get('/active', budgetController.getActive);
+router.get('/ended-for-transfer', budgetController.getEndedForTransfer);
+router.get('/overrun', budgetController.getOverrun);
 
 router.get(
     '/',
@@ -32,6 +36,8 @@ router.post(
     validate,
     budgetController.createOrUpdate
 );
+
+router.put('/:id', budgetController.update);
 
 router.delete('/:id', budgetController.remove);
 

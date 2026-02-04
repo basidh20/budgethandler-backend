@@ -20,4 +20,9 @@ router.get('/category', summaryController.getCategoryBreakdown);
 
 router.get('/yearly', summaryController.getYearlyOverview);
 
+// New comprehensive summary endpoints
+router.get('/weekly', summaryController.getWeeklySummary);
+
+router.get('/monthly-comprehensive', summaryController.getComprehensiveMonthlySummary);
+
 module.exports = router;

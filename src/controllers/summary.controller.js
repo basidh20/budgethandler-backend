@@ -87,9 +87,54 @@ const getYearlyOverview = async (req, res, next) => {
     }
 };
 
+/**
+ * @desc    Get weekly summary with insights
+ * @route   GET /api/summary/weekly
+ * @access  Private
+ */
+const getWeeklySummary = async (req, res, next) => {
+    try {
+        const weekOffset = req.query.weekOffset ? parseInt(req.query.weekOffset) : 0;
+        const weekStartDay = req.query.weekStartDay ? parseInt(req.query.weekStartDay) : 1; // Default Monday
+
+        const summary = await summaryService.getWeeklySummary(req.user._id, weekOffset, weekStartDay);
+
+        return ApiResponse.success(res, 200, 'Weekly summary retrieved successfully', summary);
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * @desc    Get comprehensive monthly summary with budget & savings integration
+ * @route   GET /api/summary/monthly-comprehensive
+ * @access  Private
+ */
+const getComprehensiveMonthlySummary = async (req, res, next) => {
+    try {
+        const now = new Date();
+        const month = req.query.month ? parseInt(req.query.month) : now.getMonth() + 1;
+        const year = req.query.year ? parseInt(req.query.year) : now.getFullYear();
+        const includeComparison = req.query.comparison !== 'false';
+
+        const summary = await summaryService.getComprehensiveMonthlySummary(
+            req.user._id,
+            month,
+            year,
+            includeComparison
+        );
+
+        return ApiResponse.success(res, 200, 'Monthly summary retrieved successfully', summary);
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getDashboard,
     getMonthlyBreakdown,
     getCategoryBreakdown,
     getYearlyOverview,
+    getWeeklySummary,
+    getComprehensiveMonthlySummary,
 };

@@ -108,11 +108,11 @@ class AuthService {
     /**
      * Update user profile
      * @param {string} userId - User ID
-     * @param {Object} updateData - { name, currency }
+     * @param {Object} updateData - { name, currency, profilePhoto, dateOfBirth, gender, phone, bio, country }
      * @returns {Object} - Updated user object
      */
     async updateProfile(userId, updateData) {
-        const { name, currency } = updateData;
+        const { name, currency, profilePhoto, dateOfBirth, gender, phone, bio, country } = updateData;
 
         const user = await User.findById(userId);
 
@@ -123,8 +123,14 @@ class AuthService {
         }
 
         // Update allowed fields
-        if (name) user.name = name;
-        if (currency) user.currency = currency;
+        if (name !== undefined) user.name = name;
+        if (currency !== undefined) user.currency = currency;
+        if (profilePhoto !== undefined) user.profilePhoto = profilePhoto;
+        if (dateOfBirth !== undefined) user.dateOfBirth = dateOfBirth;
+        if (gender !== undefined) user.gender = gender;
+        if (phone !== undefined) user.phone = phone;
+        if (bio !== undefined) user.bio = bio;
+        if (country !== undefined) user.country = country;
 
         await user.save();
 

@@ -85,6 +85,32 @@ const authValidators = {
             .trim()
             .isLength({ min: 2, max: 5 })
             .withMessage('Currency must be a valid currency code'),
+        body('profilePhoto')
+            .optional({ nullable: true })
+            .trim(),
+        body('dateOfBirth')
+            .optional({ nullable: true })
+            .isISO8601()
+            .withMessage('Date of birth must be a valid date'),
+        body('gender')
+            .optional({ nullable: true })
+            .isIn(['male', 'female', 'other', 'prefer_not_to_say'])
+            .withMessage('Gender must be male, female, other, or prefer_not_to_say'),
+        body('phone')
+            .optional({ nullable: true })
+            .trim()
+            .isLength({ max: 20 })
+            .withMessage('Phone number cannot exceed 20 characters'),
+        body('bio')
+            .optional({ nullable: true })
+            .trim()
+            .isLength({ max: 200 })
+            .withMessage('Bio cannot exceed 200 characters'),
+        body('country')
+            .optional({ nullable: true })
+            .trim()
+            .isLength({ max: 100 })
+            .withMessage('Country cannot exceed 100 characters'),
     ],
 
     changePassword: [
@@ -251,16 +277,32 @@ const budgetValidators = {
             .withMessage('Budget amount is required')
             .isFloat({ min: 0.01 })
             .withMessage('Amount must be a positive number'),
+        // Support both new date range (startDate/endDate) and legacy (month/year)
+        body('startDate')
+            .optional()
+            .isISO8601()
+            .withMessage('Start date must be a valid date'),
+        body('endDate')
+            .optional()
+            .isISO8601()
+            .withMessage('End date must be a valid date'),
+        body('periodType')
+            .optional()
+            .isIn(['daily', 'weekly', 'biweekly', 'monthly', 'quarterly', 'yearly', 'custom'])
+            .withMessage('Invalid period type'),
         body('month')
-            .notEmpty()
-            .withMessage('Month is required')
+            .optional()
             .isInt({ min: 1, max: 12 })
             .withMessage('Month must be between 1 and 12'),
         body('year')
-            .notEmpty()
-            .withMessage('Year is required')
+            .optional()
             .isInt({ min: 2000, max: 2100 })
             .withMessage('Invalid year'),
+        body('notes')
+            .optional()
+            .isString()
+            .isLength({ max: 500 })
+            .withMessage('Notes cannot exceed 500 characters'),
     ],
 
     getAll: [
