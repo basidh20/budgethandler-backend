@@ -60,6 +60,19 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // API ROUTES
 // ======================
 
+// Root endpoint (for Render health checks)
+app.get('/', (req, res) => {
+    res.status(200).json({
+        success: true,
+        message: 'Budget Tracker API',
+        version: '1.0.0',
+        health: '/api/health',
+    });
+});
+
+// Favicon handler (prevent 404 logs)
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
 // Health check endpoint
 app.get('/api/health', (req, res) => {
     res.status(200).json({
